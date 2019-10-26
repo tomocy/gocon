@@ -2,6 +2,10 @@ package client
 
 import "github.com/urfave/cli"
 
+func New() Client {
+	return newClient()
+}
+
 type Client interface {
 	Run(args []string) error
 }
