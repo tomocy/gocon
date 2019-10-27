@@ -25,10 +25,6 @@ func (c *Container) State() (*specs.State, error) {
 	return nil, errors.New("not implemented")
 }
 
-func (c *Container) Clone(...string) error {
-	return errors.New("not implemented")
-}
-
 func (c *Container) Init(*specs.Spec) error {
 	return errors.New("not implemented")
 }
