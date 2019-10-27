@@ -180,7 +180,12 @@ var sigMap = map[string]os.Signal{
 }
 
 func (c *client) delete(ctx *cli.Context) error {
-	return errors.New("not implemented")
+	id := ctx.Args().First()
+	if err := validateID(id); err != nil {
+		return err
+	}
+
+	return c.container(id).Delete()
 }
 
 func validateID(id string) error {
