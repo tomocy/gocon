@@ -95,7 +95,38 @@ func (c *client) state(ctx *cli.Context) error {
 }
 
 func (c *client) create(ctx *cli.Context) error {
-	return errors.New("not implemented")
+	id, specPath := ctx.Args().First(), ctx.Args().Get(1)
+
+	return c.container(id).Clone("init", id, specPath)
+}
+
+func (c *client) init(ctx *cli.Context) error {
+	id, specPath := ctx.Args().First(), ctx.Args().Get(1)
+	if err := validateID(id); err != nil {
+		return err
+	}
+
+	spec, err := loadSpec(specPath)
+	if err != nil {
+		return err
+	}
+
+	return c.container(id).Init(spec)
+}
+
+func loadSpec(name string) (*specs.Spec, error) {
+	src, err := os.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer src.Close()
+
+	spec := new(specs.Spec)
+	if err := json.NewDecoder(src).Decode(spec); err != nil {
+		return nil, err
+	}
+
+	return spec, nil
 }
 
 func (c *client) init(ctx *cli.Context) error {
