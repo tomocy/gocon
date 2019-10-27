@@ -3,6 +3,7 @@ package gocon
 import (
 	"fmt"
 	"io/ioutil"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,6 +38,11 @@ func (c *Container) Init(spec *specs.Spec) error {
 	}
 	if err := c.enable(spec.Root, bins, libs...); err != nil {
 		return fmt.Errorf("failed to enable: %s", err)
+	}
+	if spec.Linux != nil {
+		if err := c.limit(spec.Linux); err != nil {
+			return fmt.Errorf("failed to limit: %s", err)
+		}
 	}
 	if err := c.exec(spec.Process); err != nil {
 		return fmt.Errorf("failed to exec: %s", err)
@@ -118,6 +124,88 @@ func copyFile(src, dst string) error {
 
 	return ioutil.WriteFile(dst, read, 0755)
 }
+
+func (c *Container) limit(spec *specs.Linux) error {
+	if spec.Resources != nil && spec.Resources.CPU != nil {
+		if err := c.limitCPU(spec.CgroupsPath, spec.Resources.CPU); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (c *Container) limitCPU(path string, spec *specs.LinuxCPU) error {
+	dir := c.cgroupsDir("cpu", path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	if spec.Shares != nil {
+		if err := c.limitCPUShares(dir, *spec.Shares); err != nil {
+			return err
+		}
+	}
+	if spec.Quota != nil {
+		if err := c.limitCPUQuota(dir, *spec.Quota); err != nil {
+			return err
+		}
+	}
+	if spec.Period != nil {
+		if err := c.limitCPUPeriod(dir, *spec.Period); err != nil {
+			return err
+		}
+	}
+	if spec.RealtimeRuntime != nil {
+		if err := c.limitCPURealtimeRuntime(dir, *spec.RealtimeRuntime); err != nil {
+			return err
+		}
+	}
+	if spec.RealtimePeriod != nil {
+		if err := c.limitCPURealtimePeriod(dir, *spec.RealtimePeriod); err != nil {
+			return err
+		}
+	}
+
+	return c.addLimit(filepath.Join(dir, "tasks"), fmt.Sprint(os.Getpid()))
+}
+
+func (c *Container) limitCPUShares(dir string, shares uint64) error {
+	return c.addLimit(filepath.Join(dir, "cpu.shares"), fmt.Sprint(shares))
+}
+
+func (c *Container) limitCPUQuota(dir string, quota int64) error {
+	return c.addLimit(filepath.Join(dir, "cpu.cfs_quota_us"), fmt.Sprint(quota))
+}
+
+func (c *Container) limitCPUPeriod(dir string, period uint64) error {
+	return c.addLimit(filepath.Join(dir, "cpu.cfs_period_us"), fmt.Sprint(period))
+}
+
+func (c *Container) limitCPURealtimeRuntime(dir string, runtime int64) error {
+	log.Println(runtime)
+	return c.addLimit(filepath.Join(dir, "cpu.rt_runtime_us"), fmt.Sprint(runtime))
+}
+
+func (c *Container) limitCPURealtimePeriod(dir string, period uint64) error {
+	return c.addLimit(filepath.Join(dir, "cpu.rt_period_us"), fmt.Sprint(period))
+}
+
+func (c *Container) addLimit(name, limit string) error {
+	return ioutil.WriteFile(name, []byte(limit), 644)
+}
+
+func (c *Container) cgroupsDir(kind, path string) string {
+	if path == "" {
+		return filepath.Join(cgroupsDir, kind, "gocon", c.ID)
+	}
+	if !filepath.IsAbs(path) {
+		return filepath.Join(cgroupsDir, kind, "gocon", c.ID, path)
+	}
+
+	return filepath.Join(cgroupsDir, kind, path)
+}
+
+const cgroupsDir = "/sys/fs/cgroup"
 
 func (c *Container) exec(proc *specs.Process) error {
 	cmd := exec.Command(proc.Args[0], proc.Args[1:]...)
