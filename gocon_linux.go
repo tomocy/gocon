@@ -39,7 +39,11 @@ func (c *Container) createWorkspace() error {
 		return err
 	}
 
-	return c.createStateFile()
+	if err := c.createStateFile(); err != nil {
+		return err
+	}
+
+	return c.createPipe()
 }
 
 func (c *Container) createStateFile() error {
@@ -51,6 +55,12 @@ func (c *Container) createStateFile() error {
 	defer dst.Close()
 
 	return json.NewEncoder(dst).Encode(specs.State{})
+}
+
+func (c *Container) createPipe() error {
+	name := c.pipeFilename()
+
+	return unix.Mkfifo(name, 0744)
 }
 
 func (c *Container) buildCloneCmd(args ...string) *exec.Cmd {
@@ -94,6 +104,23 @@ func (c *Container) Init(spec *specs.Spec) error {
 	return nil
 }
 
+func (c *Container) load() error {
+	name := c.stateFilename()
+	src, err := os.Open(name)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	return json.NewDecoder(src).Decode(&c.state)
+}
+
+func (c *Container) meet(spec *specs.Spec) {
+	c.Version = spec.Version
+	c.Bundle = spec.Root.Path
+	c.Annotations = spec.Annotations
+}
+
 func (c *Container) save() error {
 	name := c.stateFilename()
 	dst, err := os.OpenFile(name, os.O_WRONLY, 0744)
@@ -107,6 +134,10 @@ func (c *Container) save() error {
 
 func (c *Container) stateFilename() string {
 	return filepath.Join(c.workspace(), "spec.json")
+}
+
+func (c *Container) pipeFilename() string {
+	return filepath.Join(c.workspace(), "pipe.fifo")
 }
 
 func (c *Container) workspace() string {
