@@ -1,6 +1,7 @@
 package client
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 
@@ -80,7 +81,17 @@ func (c *client) setCommands() {
 }
 
 func (c *client) state(ctx *cli.Context) error {
-	return errors.New("not implemented")
+	id := ctx.Args().First()
+	if err := validateID(id); err != nil {
+		return err
+	}
+
+	state, err := c.container(id).State()
+	if err != nil {
+		return err
+	}
+
+	return json.NewEncoder(os.Stdout).Encode(state)
 }
 
 func (c *client) create(ctx *cli.Context) error {
