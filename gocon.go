@@ -1,6 +1,11 @@
 package gocon
 
-import "github.com/opencontainers/runtime-spec/specs-go"
+import (
+	"errors"
+	"os"
+
+	"github.com/opencontainers/runtime-spec/specs-go"
+)
 
 func New(id string) *Container {
 	return &Container{
@@ -15,3 +20,27 @@ type Container struct {
 }
 
 type state specs.State
+
+func (c *Container) State() (*specs.State, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (c *Container) Clone(...string) error {
+	return errors.New("not implemented")
+}
+
+func (c *Container) Init(*specs.Spec) error {
+	return errors.New("not implemented")
+}
+
+func (c *Container) Start() error {
+	return errors.New("not implemented")
+}
+
+func (c *Container) Kill(os.Signal) error {
+	return errors.New("not implemented")
+}
+
+func (c *Container) Delete() error {
+	return errors.New("not implemented")
+}
