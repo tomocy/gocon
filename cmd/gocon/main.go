@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	c := client.New()
+	c := client.New(nil)
 	if err := c.Run(os.Args); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

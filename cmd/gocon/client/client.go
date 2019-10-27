@@ -13,16 +13,18 @@ import (
 	"github.com/urfave/cli"
 )
 
-func New() Client {
-	return newClient()
+func New(fn func(string) Container) Client {
+	return newClient(fn)
 }
 
 type Client interface {
 	Run(args []string) error
 }
 
-func newClient() *client {
-	c := new(client)
+func newClient(fn func(string) Container) *client {
+	c := &client{
+		container: fn,
+	}
 	c.setUp()
 
 	return c
