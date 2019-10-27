@@ -44,6 +44,9 @@ func (c *Container) Init(spec *specs.Spec) error {
 			return fmt.Errorf("failed to limit: %s", err)
 		}
 	}
+	if err := c.pivotRoot(spec.Root); err != nil {
+		return fmt.Errorf("failed to pivot root: %s", err)
+	}
 	if err := c.exec(spec.Process); err != nil {
 		return fmt.Errorf("failed to exec: %s", err)
 	}
@@ -206,6 +209,30 @@ func (c *Container) cgroupsDir(kind, path string) string {
 }
 
 const cgroupsDir = "/sys/fs/cgroup"
+
+func (c *Container) pivotRoot(root *specs.Root) error {
+	oldFs := "oldfs"
+	if err := os.MkdirAll(filepath.Join(root.Path, oldFs), 0755); err != nil {
+		return err
+	}
+	if err := unix.Mount(root.Path, root.Path, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
+		return err
+	}
+	if err := unix.PivotRoot(root.Path, filepath.Join(root.Path, oldFs)); err != nil {
+		return err
+	}
+	if err := unix.Chdir("/"); err != nil {
+		return err
+	}
+	if err := unix.Unmount(oldFs, unix.MNT_DETACH); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(oldFs); err != nil {
+		return err
+	}
+
+	return nil
+}
 
 func (c *Container) exec(proc *specs.Process) error {
 	cmd := exec.Command(proc.Args[0], proc.Args[1:]...)
