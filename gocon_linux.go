@@ -34,6 +34,9 @@ func (c *Container) Init(spec *specs.Spec) error {
 	if err := c.mount(spec.Root, spec.Mounts); err != nil {
 		return fmt.Errorf("failed to mount: %s", err)
 	}
+	if err := c.exec(spec.Process); err != nil {
+		return fmt.Errorf("failed to exec: %s", err)
+	}
 
 	return nil
 }
@@ -62,4 +65,12 @@ func (c *Container) mount(root *specs.Root, ms []specs.Mount) error {
 
 var defaultFs = []specs.Mount{
 	{Destination: "/proc", Type: "proc", Source: "/proc"},
+}
+
+func (c *Container) exec(proc *specs.Process) error {
+	cmd := exec.Command(proc.Args[0], proc.Args[1:]...)
+	cmd.Env = proc.Env
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+
+	return cmd.Run()
 }
