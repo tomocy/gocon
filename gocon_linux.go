@@ -1,10 +1,12 @@
 package gocon
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"syscall"
 
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 )
 
@@ -22,4 +24,12 @@ func (c *Container) Clone(args ...string) error {
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 
 	return cmd.Run()
+}
+
+func (c *Container) Init(spec *specs.Spec) error {
+	if err := unix.Sethostname([]byte(c.ID)); err != nil {
+		return fmt.Errorf("failed to set hostname: %s", err)
+	}
+
+	return nil
 }
