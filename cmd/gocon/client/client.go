@@ -25,6 +25,7 @@ func newClient() *client {
 
 type client struct {
 	cli.App
+	container func(string) Container
 }
 
 func (c *client) setUp() {
@@ -100,6 +101,14 @@ func (c *client) kill(ctx *cli.Context) error {
 
 func (c *client) delete(ctx *cli.Context) error {
 	return errors.New("not implemented")
+}
+
+func validateID(id string) error {
+	if id == "" {
+		return errors.New("id should not be empty")
+	}
+
+	return nil
 }
 
 type Container interface {
