@@ -1,6 +1,7 @@
 package gocon
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -14,6 +15,45 @@ import (
 )
 
 func (c *Container) Clone(args ...string) error {
+	if err := c.createWorkspace(); err != nil {
+		return fmt.Errorf("failed to create workspace: %s", err)
+	}
+
+	cmd := c.buildCloneCmd(args...)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	c.Pid = cmd.Process.Pid
+	c.Status = statusCreating
+
+	if err := c.save(); err != nil {
+		return fmt.Errorf("failed to save: %s", err)
+	}
+
+	return cmd.Wait()
+}
+
+func (c *Container) createWorkspace() error {
+	dir := c.workspace()
+	if err := os.MkdirAll(dir, 0744); err != nil {
+		return err
+	}
+
+	return c.createStateFile()
+}
+
+func (c *Container) createStateFile() error {
+	name := c.stateFilename()
+	dst, err := os.Create(name)
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+
+	return json.NewEncoder(dst).Encode(specs.State{})
+}
+
+func (c *Container) buildCloneCmd(args ...string) *exec.Cmd {
 	cmd := exec.Command("/proc/self/exe", args...)
 	cmd.SysProcAttr = &unix.SysProcAttr{
 		Cloneflags: unix.CLONE_NEWIPC | unix.CLONE_NEWNET | unix.CLONE_NEWNS | unix.CLONE_NEWPID | unix.CLONE_NEWUSER | unix.CLONE_NEWUTS,
@@ -26,7 +66,7 @@ func (c *Container) Clone(args ...string) error {
 	}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 
-	return cmd.Run()
+	return cmd
 }
 
 func (c *Container) Init(spec *specs.Spec) error {
@@ -53,6 +93,27 @@ func (c *Container) Init(spec *specs.Spec) error {
 
 	return nil
 }
+
+func (c *Container) save() error {
+	name := c.stateFilename()
+	dst, err := os.OpenFile(name, os.O_WRONLY, 0744)
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+
+	return json.NewEncoder(dst).Encode(c.state)
+}
+
+func (c *Container) stateFilename() string {
+	return filepath.Join(c.workspace(), "spec.json")
+}
+
+func (c *Container) workspace() string {
+	return filepath.Join(workSpacesDir, c.ID)
+}
+
+const workSpacesDir = "/run/gocon"
 
 func (c *Container) mount(root *specs.Root, ms []specs.Mount) error {
 	var flags uintptr
@@ -241,3 +302,7 @@ func (c *Container) exec(proc *specs.Process) error {
 
 	return cmd.Run()
 }
+
+const (
+	statusCreating = "creating"
+)
