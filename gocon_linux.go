@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -30,6 +31,35 @@ func (c *Container) Init(spec *specs.Spec) error {
 	if err := unix.Sethostname([]byte(c.ID)); err != nil {
 		return fmt.Errorf("failed to set hostname: %s", err)
 	}
+	if err := c.mount(spec.Root, spec.Mounts); err != nil {
+		return fmt.Errorf("failed to mount: %s", err)
+	}
 
 	return nil
+}
+
+func (c *Container) mount(root *specs.Root, ms []specs.Mount) error {
+	var flags uintptr
+	if root.Readonly {
+		flags = unix.MS_RDONLY
+	}
+
+	ms = append(defaultFs, ms...)
+	for _, m := range ms {
+		dst := filepath.Join(root.Path, m.Destination)
+		if err := os.MkdirAll(dst, 0755); err != nil {
+			return err
+		}
+
+		flags |= unix.MS_NOEXEC | unix.MS_NOSUID | unix.MS_NODEV
+		if err := unix.Mount(m.Source, dst, m.Type, flags, ""); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+var defaultFs = []specs.Mount{
+	{Destination: "/proc", Type: "proc", Source: "/proc"},
 }
