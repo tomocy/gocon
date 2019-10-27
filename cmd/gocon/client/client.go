@@ -134,7 +134,12 @@ func (c *client) init(ctx *cli.Context) error {
 }
 
 func (c *client) start(ctx *cli.Context) error {
-	return errors.New("not implemented")
+	id := ctx.Args().First()
+	if err := validateID(id); err != nil {
+		return err
+	}
+
+	return c.container(id).Start()
 }
 
 func (c *client) kill(ctx *cli.Context) error {
