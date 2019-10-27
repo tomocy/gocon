@@ -13,16 +13,8 @@ import (
 	"github.com/urfave/cli"
 )
 
-func New(fn func(string) Container) Client {
-	return newClient(fn)
-}
-
-type Client interface {
-	Run(args []string) error
-}
-
-func newClient(fn func(string) Container) *client {
-	c := &client{
+func New(fn func(string) Container) *Client {
+	c := &Client{
 		container: fn,
 	}
 	c.setUp()
@@ -30,23 +22,23 @@ func newClient(fn func(string) Container) *client {
 	return c
 }
 
-type client struct {
+type Client struct {
 	cli.App
 	container func(string) Container
 }
 
-func (c *client) setUp() {
+func (c *Client) setUp() {
 	c.App = *cli.NewApp()
 	c.setBasic()
 	c.setCommands()
 }
 
-func (c *client) setBasic() {
+func (c *Client) setBasic() {
 	c.Name = "gocon"
 	c.Usage = "a CLI client which implements OCI runtime specification and is presented in Go Confenrece'19 Autumn in Tokyo"
 }
 
-func (c *client) setCommands() {
+func (c *Client) setCommands() {
 	c.Commands = []cli.Command{
 		cli.Command{
 			Name:      "state",
@@ -86,7 +78,7 @@ func (c *client) setCommands() {
 	}
 }
 
-func (c *client) state(ctx *cli.Context) error {
+func (c *Client) state(ctx *cli.Context) error {
 	id := ctx.Args().First()
 	if err := validateID(id); err != nil {
 		return err
@@ -100,13 +92,13 @@ func (c *client) state(ctx *cli.Context) error {
 	return json.NewEncoder(os.Stdout).Encode(state)
 }
 
-func (c *client) create(ctx *cli.Context) error {
+func (c *Client) create(ctx *cli.Context) error {
 	id, specPath := ctx.Args().First(), ctx.Args().Get(1)
 
 	return c.container(id).Clone("init", id, specPath)
 }
 
-func (c *client) init(ctx *cli.Context) error {
+func (c *Client) init(ctx *cli.Context) error {
 	id, specPath := ctx.Args().First(), ctx.Args().Get(1)
 	if err := validateID(id); err != nil {
 		return err
@@ -135,11 +127,7 @@ func loadSpec(name string) (*specs.Spec, error) {
 	return spec, nil
 }
 
-func (c *client) init(ctx *cli.Context) error {
-	return errors.New("not implemented")
-}
-
-func (c *client) start(ctx *cli.Context) error {
+func (c *Client) start(ctx *cli.Context) error {
 	id := ctx.Args().First()
 	if err := validateID(id); err != nil {
 		return err
@@ -148,7 +136,7 @@ func (c *client) start(ctx *cli.Context) error {
 	return c.container(id).Start()
 }
 
-func (c *client) kill(ctx *cli.Context) error {
+func (c *Client) kill(ctx *cli.Context) error {
 	id, sigName := ctx.Args().First(), ctx.Args().Get(1)
 	if err := validateID(id); err != nil {
 		return err
@@ -181,7 +169,7 @@ var sigMap = map[string]os.Signal{
 	"EGV": syscall.SIGSEGV, "PIPE": syscall.SIGPIPE, "ALRM": syscall.SIGALRM, "TERM": syscall.SIGTERM,
 }
 
-func (c *client) delete(ctx *cli.Context) error {
+func (c *Client) delete(ctx *cli.Context) error {
 	id := ctx.Args().First()
 	if err := validateID(id); err != nil {
 		return err
