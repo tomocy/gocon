@@ -29,11 +29,52 @@ type Client struct {
 func (c *Client) setUp() {
 	c.App = *cli.NewApp()
 	c.setBasic()
+	c.setCommands()
 }
 
 func (c *Client) setBasic() {
 	c.Name = "gocon"
 	c.Usage = "a container runtime which implements OCU runtime specification"
+}
+
+func (c *Client) setCommands() {
+	c.Commands = []cli.Command{
+		{
+			Name:      "state",
+			Usage:     "state the container of the given id",
+			ArgsUsage: "id",
+			Action:    c.state,
+		},
+		{
+			Name:      "create",
+			Usage:     "create a container of the given id",
+			ArgsUsage: "id spec-path",
+			Action:    c.create,
+		},
+		{
+			Name:   "init",
+			Action: c.init,
+			Hidden: true,
+		},
+		{
+			Name:      "start",
+			Usage:     "start the container of the given id",
+			ArgsUsage: "id",
+			Action:    c.start,
+		},
+		{
+			Name:      "kill",
+			Usage:     "send the given signal to the container of the given id",
+			ArgsUsage: "id signal",
+			Action:    c.kill,
+		},
+		{
+			Name:      "delete",
+			Usage:     "delete the container of the given id",
+			ArgsUsage: "id",
+			Action:    c.delete,
+		},
+	}
 }
 
 func (c *Client) state(ctx *cli.Context) error {
