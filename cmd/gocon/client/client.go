@@ -48,6 +48,31 @@ func (c *Client) create(ctx *cli.Context) error {
 	return c.container(id).Clone("init", id, specPath)
 }
 
+func (c *Client) init(ctx *cli.Context) error {
+	id, specPath := ctx.Args().First(), ctx.Args().Get(1)
+	spec, err := loadSpec(specPath)
+	if err != nil {
+		return err
+	}
+
+	return c.container(id).Init(spec)
+}
+
+func loadSpec(path string) (*specs.Spec, error) {
+	src, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer src.Close()
+
+	spec := new(specs.Spec)
+	if err := json.NewDecoder(src).Decode(spec); err != nil {
+		return nil, err
+	}
+
+	return spec, nil
+}
+
 type Container interface {
 	State() (*specs.State, error)
 	Clone(...string) error
