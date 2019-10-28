@@ -73,6 +73,12 @@ func loadSpec(path string) (*specs.Spec, error) {
 	return spec, nil
 }
 
+func (c *Client) start(ctx *cli.Context) error {
+	id := ctx.Args().First()
+
+	return c.container(id).Start()
+}
+
 type Container interface {
 	State() (*specs.State, error)
 	Clone(...string) error
