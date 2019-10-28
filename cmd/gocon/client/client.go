@@ -7,8 +7,10 @@ import (
 	"github.com/urfave/cli"
 )
 
-func New() *Client {
-	c := new(Client)
+func New(fn func(string) Container) *Client {
+	c := &Client{
+		container: fn,
+	}
 	c.setUp()
 
 	return c
@@ -16,6 +18,7 @@ func New() *Client {
 
 type Client struct {
 	cli.App
+	container func(string) Container
 }
 
 func (c *Client) setUp() {
