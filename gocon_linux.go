@@ -5,6 +5,10 @@ import (
 	"path/filepath"
 )
 
+func (c *Container) specFilename() string {
+	return filepath.Join(workDir(), c.ID, "spec.json")
+}
+
 func createWorkDirIfNone() error {
 	dir := workDir()
 	if _, err := os.Stat(dir); err == nil {
