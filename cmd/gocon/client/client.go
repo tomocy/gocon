@@ -113,6 +113,12 @@ var sigMap = map[string]os.Signal{
 	"PIPE": syscall.SIGPIPE, "ALRM": syscall.SIGALRM, "TEM": syscall.SIGTERM,
 }
 
+func (c *Client) delete(ctx *cli.Context) error {
+	id := ctx.Args().First()
+
+	return c.container(id).Delete()
+}
+
 type Container interface {
 	State() (*specs.State, error)
 	Clone(...string) error
