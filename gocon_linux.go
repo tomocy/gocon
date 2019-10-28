@@ -1,25 +1,38 @@
 package gocon
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 )
 
-func (c *Container) specFilename() string {
-	return filepath.Join(workDir(), c.ID, "spec.json")
-}
-
-func createWorkDirIfNone() error {
-	dir := workDir()
-	if _, err := os.Stat(dir); err == nil {
-		return nil
+func (c *Container) save() error {
+	dst, err := os.OpenFile(c.stateFilename(), os.O_CREATE|os.O_WRONLY, 0744)
+	if err != nil {
+		return fmt.Errorf("failed to open spec file: %s", err)
 	}
+	defer dst.Close()
 
-	return createWorkDir()
+	return json.NewEncoder(dst).Encode(c)
 }
 
-func createWorkDir() error {
-	return os.MkdirAll(workDir(), 0744)
+func (c *Container) load() error {
+	src, err := os.Open(c.stateFilename())
+	if err != nil {
+		return fmt.Errorf("failed to open spec file: %s", err)
+	}
+	defer src.Close()
+
+	return json.NewDecoder(src).Decode(c)
+}
+
+func (c *Container) stateFilename() string {
+	return filepath.Join(c.workDir(), "state.json")
+}
+
+func (c *Container) workDir() string {
+	return filepath.Join(workDir(), c.ID)
 }
 
 func workDir() string {
