@@ -2,7 +2,11 @@ package client
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
+	"strconv"
+	"strings"
+	"syscall"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/urfave/cli"
@@ -77,6 +81,36 @@ func (c *Client) start(ctx *cli.Context) error {
 	id := ctx.Args().First()
 
 	return c.container(id).Start()
+}
+
+func (c *Client) kill(ctx *cli.Context) error {
+	id, sigStr := ctx.Args().First(), ctx.Args().Get(1)
+	sig, err := mapSignal(sigStr)
+	if err != nil {
+		return err
+	}
+
+	return c.container(id).Kill(sig)
+}
+
+func mapSignal(target string) (os.Signal, error) {
+	if n, err := strconv.Atoi(target); err == nil {
+		return syscall.Signal(n), nil
+	}
+
+	trimed := strings.TrimLeft(strings.ToUpper(target), "SIG")
+	if signal, ok := sigMap[trimed]; ok {
+		return signal, nil
+	}
+
+	return nil, fmt.Errorf("no such signal")
+}
+
+var sigMap = map[string]os.Signal{
+	"HUP": syscall.SIGHUP, "INT": syscall.SIGINT, "QUITA": syscall.SIGQUIT,
+	"ILL": syscall.SIGILL, "TRAP": syscall.SIGTRAP, "ABRT": syscall.SIGABRT,
+	"FPE": syscall.SIGFPE, "KILL": syscall.SIGKILL, "SEGV": syscall.SIGSEGV,
+	"PIPE": syscall.SIGPIPE, "ALRM": syscall.SIGALRM, "TEM": syscall.SIGTERM,
 }
 
 type Container interface {
