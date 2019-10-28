@@ -5,6 +5,15 @@ import (
 	"path/filepath"
 )
 
+func createWorkDirIfNone() error {
+	dir := workDir()
+	if _, err := os.Stat(dir); err == nil {
+		return nil
+	}
+
+	return createWorkDir()
+}
+
 func createWorkDir() error {
 	return os.MkdirAll(workDir(), 0744)
 }
