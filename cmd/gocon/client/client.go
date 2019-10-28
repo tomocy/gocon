@@ -1,6 +1,11 @@
 package client
 
-import "github.com/urfave/cli"
+import (
+	"os"
+
+	"github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/urfave/cli"
+)
 
 func New() *Client {
 	c := new(Client)
@@ -21,4 +26,13 @@ func (c *Client) setUp() {
 func (c *Client) setBasic() {
 	c.Name = "gocon"
 	c.Usage = "a container runtime which implements OCU runtime specification"
+}
+
+type Container interface {
+	State() (*specs.State, error)
+	Clone(...string) error
+	Init(*specs.Spec) error
+	Start() error
+	Kill(os.Signal) error
+	Delete() error
 }
