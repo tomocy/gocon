@@ -1,6 +1,7 @@
 package client
 
 import (
+	"encoding/json"
 	"os"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -29,6 +30,16 @@ func (c *Client) setUp() {
 func (c *Client) setBasic() {
 	c.Name = "gocon"
 	c.Usage = "a container runtime which implements OCU runtime specification"
+}
+
+func (c *Client) state(ctx *cli.Context) error {
+	id := ctx.Args().First()
+	state, err := c.container(id).State()
+	if err != nil {
+		return err
+	}
+
+	return json.NewEncoder(os.Stdout).Encode(state)
 }
 
 type Container interface {
