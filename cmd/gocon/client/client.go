@@ -42,6 +42,12 @@ func (c *Client) state(ctx *cli.Context) error {
 	return json.NewEncoder(os.Stdout).Encode(state)
 }
 
+func (c *Client) create(ctx *cli.Context) error {
+	id, specPath := ctx.Args().First(), ctx.Args().Get(1)
+
+	return c.container(id).Clone("init", id, specPath)
+}
+
 type Container interface {
 	State() (*specs.State, error)
 	Clone(...string) error
