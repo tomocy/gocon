@@ -25,7 +25,29 @@ func (c *Container) Clone(args ...string) error {
 		return fmt.Errorf("failed to create work dir: %s", err)
 	}
 
-	return c.clone(args...)
+	if err := c.save(); err != nil {
+		return fmt.Errorf("failed to save: %s", err)
+	}
+
+	select {
+	case err := <-c.waitChildReady():
+		if err != nil {
+			return fmt.Errorf("failed to wait child ready: %s", err)
+		}
+	case err := <-c.clone(args...):
+		if err != nil {
+			return err
+		}
+	}
+
+	if err := c.load(); err != nil {
+		return fmt.Errorf("failed to load: %s", err)
+	}
+	if err := c.save(); err != nil {
+		return fmt.Errorf("failed to save: %s", err)
+	}
+
+	return nil
 }
 
 func (c *Container) createWorkspace() error {
@@ -86,19 +108,22 @@ func (c *Container) createNamedPipe() error {
 	return nil
 }
 
-func (c *Container) clone(args ...string) error {
-	cmd := c.buildCloneCmd(args...)
-	if err := cmd.Start(); err != nil {
-		return err
-	}
+func (c *Container) clone(args ...string) <-chan error {
+	ch := make(chan error)
+	go func() {
+		defer close(ch)
 
-	c.Pid = cmd.Process.Pid
-	if err := c.save(); err != nil {
-		cmd.Process.Kill()
-		return fmt.Errorf("failed to save: %s", err)
-	}
+		cmd := c.buildCloneCmd(args...)
+		if err := cmd.Start(); err != nil {
+			ch <- err
+		}
 
-	return cmd.Wait()
+		c.Pid = cmd.Process.Pid
+
+		ch <- cmd.Wait()
+	}()
+
+	return ch
 }
 
 func (c *Container) buildCloneCmd(args ...string) *exec.Cmd {
@@ -116,6 +141,17 @@ func (c *Container) buildCloneCmd(args ...string) *exec.Cmd {
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 
 	return cmd
+}
+
+func (c *Container) waitChildReady() <-chan error {
+	ch := make(chan error)
+	go func() {
+		defer close(ch)
+
+		ch <- c.readPipe()
+	}()
+
+	return ch
 }
 
 func (c *Container) Init(spec *specs.Spec) error {
@@ -266,6 +302,16 @@ func (c *Container) load() error {
 	defer src.Close()
 
 	return json.NewDecoder(src).Decode(c)
+}
+
+func (c *Container) readPipe() error {
+	name := fmt.Sprintf("/proc/self/fd/%d", c.PipeFD)
+	f, err := os.Open(name)
+	if err != nil {
+		return err
+	}
+
+	return f.Close()
 }
 
 func (c *Container) stateFilename() string {
