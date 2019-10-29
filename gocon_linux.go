@@ -15,7 +15,78 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+type Container struct {
+	state
+	PipeFD int `json:"pipe_fd"`
+}
+
 func (c *Container) Clone(args ...string) error {
+	if err := c.createWorkspace(); err != nil {
+		return fmt.Errorf("failed to create work dir: %s", err)
+	}
+
+	return c.clone(args...)
+}
+
+func (c *Container) createWorkspace() error {
+	if err := createWorkDirIfNone(); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(c.workDir(), 0744); err != nil {
+		return err
+	}
+
+	if err := c.createStateFile(); err != nil {
+		return err
+	}
+	if err := c.createNamedPipe(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func createWorkDirIfNone() error {
+	if _, err := os.Stat(workDir()); err == nil {
+		return nil
+	}
+
+	return createWorkDir()
+}
+
+func createWorkDir() error {
+	return os.MkdirAll(workDir(), 0744)
+}
+
+func (c *Container) createStateFile() error {
+	name := c.stateFilename()
+	f, err := os.Create(name)
+	if err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+
+	return c.save()
+}
+
+func (c *Container) createNamedPipe() error {
+	name := c.pipename()
+	if err := unix.Mkfifo(name, 700); err != nil {
+		return err
+	}
+
+	fd, err := unix.Open(name, os.O_RDONLY|unix.O_NONBLOCK, 700)
+	if err != nil {
+		return err
+	}
+	c.PipeFD = fd
+
+	return nil
+}
+
+func (c *Container) clone(args ...string) error {
 	cmd := c.buildCloneCmd(args...)
 	if err := cmd.Start(); err != nil {
 		return err
@@ -186,6 +257,10 @@ func (c *Container) load() error {
 
 func (c *Container) stateFilename() string {
 	return filepath.Join(c.workDir(), "state.json")
+}
+
+func (c *Container) pipename() string {
+	return filepath.Join(c.workDir(), "pipe.fifo")
 }
 
 func (c *Container) workDir() string {

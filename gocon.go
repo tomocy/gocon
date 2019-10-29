@@ -10,8 +10,4 @@ func New(id string) *Container {
 	}
 }
 
-type Container struct {
-	state
-}
-
 type state specs.State
