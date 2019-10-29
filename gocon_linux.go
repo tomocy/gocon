@@ -3,11 +3,15 @@ package gocon
 import (
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 
+	"github.com/docker/docker/pkg/mount"
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 )
 
@@ -41,6 +45,123 @@ func (c *Container) buildCloneCmd(args ...string) *exec.Cmd {
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 
 	return cmd
+}
+
+func (c *Container) Init(spec *specs.Spec) error {
+	if err := c.load(); err != nil {
+		return fmt.Errorf("failed to load: %s", err)
+	}
+	c.Version, c.Annotations = spec.Version, spec.Annotations
+	c.Bundle, _ = filepath.Abs(spec.Root.Path)
+
+	if spec.Hostname != "" {
+		if err := unix.Sethostname([]byte(spec.Hostname)); err != nil {
+			return fmt.Errorf("failed to set hostname")
+		}
+	}
+
+	if err := c.mount(spec.Root, spec.Mounts); err != nil {
+		return fmt.Errorf("failed to mount: %s", err)
+	}
+
+	if spec.Linux != nil {
+		if err := c.limit(spec.Linux); err != nil {
+			return fmt.Errorf("failed to limit: %s", err)
+		}
+	}
+
+	if err := c.save(); err != nil {
+		return fmt.Errorf("failed to save: %s", err)
+	}
+
+	if err := c.pivotRoot(spec.Root); err != nil {
+		return fmt.Errorf("failed to pivot root: %s", err)
+	}
+
+	return unix.Exec(spec.Process.Args[0], spec.Process.Args, spec.Process.Env)
+}
+
+func (c *Container) mount(root *specs.Root, ms []specs.Mount) error {
+	var ops []string
+	if root.Readonly {
+		ops = append(ops, "ro")
+	}
+
+	for _, m := range ms {
+		if err := mount.ForceMount(
+			m.Source, filepath.Join(root.Path, m.Destination), m.Type, strings.Join(ops, ","),
+		); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (c *Container) limit(spec *specs.Linux) error {
+	dir := cgroupDir(spec.CgroupsPath)
+	if spec.Resources != nil && spec.Resources.CPU != nil {
+		if err := c.limitCPU(dir, spec.Resources.CPU); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func cgroupDir(path string) string {
+	dir := "/sys/fs/cgroup"
+	if filepath.IsAbs(path) {
+		return filepath.Join(dir, path)
+	}
+
+	return filepath.Join(dir, "gocon", path)
+}
+
+func (c *Container) limitCPU(dir string, spec *specs.LinuxCPU) error {
+	dir = filepath.Join(dir, "cpu", "gocon")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	if spec.Quota != nil {
+		if err := ioutil.WriteFile(
+			filepath.Join(dir, "cpu.cfs_quota_us"), []byte(fmt.Sprint(*spec.Quota)), 0755,
+		); err != nil {
+			return err
+		}
+	}
+
+	if err := ioutil.WriteFile(
+		filepath.Join(dir, "tasks"), []byte(fmt.Sprint(os.Getpid())), 0755,
+	); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *Container) pivotRoot(root *specs.Root) error {
+	oldFs := "oldfs"
+	if err := os.MkdirAll(filepath.Join(root.Path, oldFs), 0700); err != nil {
+		return err
+	}
+	if err := unix.Mount(root.Path, root.Path, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
+		return err
+	}
+	if err := unix.PivotRoot(root.Path, filepath.Join(root.Path, oldFs)); err != nil {
+		return err
+	}
+	if err := unix.Chdir("/"); err != nil {
+		return err
+	}
+	if err := unix.Unmount(oldFs, unix.MNT_DETACH); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(oldFs); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (c *Container) save() error {
