@@ -149,7 +149,11 @@ func (c *Container) Init(spec *specs.Spec) error {
 		return fmt.Errorf("failed to pivot root: %s", err)
 	}
 
-	return unix.Exec(spec.Process.Args[0], spec.Process.Args, spec.Process.Env)
+	if err := c.exec(spec.Process); err != nil {
+		return fmt.Errorf("failed to exec: %s", err)
+	}
+
+	return nil
 }
 
 func (c *Container) mount(root *specs.Root, ms []specs.Mount) error {
@@ -233,6 +237,15 @@ func (c *Container) pivotRoot(root *specs.Root) error {
 	}
 
 	return nil
+}
+
+func (c *Container) exec(proc *specs.Process) error {
+	path, err := exec.LookPath(proc.Args[0])
+	if err != nil {
+		return err
+	}
+
+	return unix.Exec(path, proc.Args, os.Environ())
 }
 
 func (c *Container) save() error {
