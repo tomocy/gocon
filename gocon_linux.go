@@ -325,6 +325,19 @@ func (c *Container) tellChildToStart() error {
 	return c.writePipe(ofChild)
 }
 
+func (c *Container) Kill(sig os.Signal) error {
+	if err := c.load(); err != nil {
+		return fmt.Errorf("failed to load: %s", err)
+	}
+
+	proc, err := os.FindProcess(c.Pid)
+	if err != nil {
+		return fmt.Errorf("failed to find process: %s", err)
+	}
+
+	return proc.Signal(sig)
+}
+
 func (c *Container) save() error {
 	dst, err := os.OpenFile(c.stateFilename(), os.O_CREATE|os.O_WRONLY, 0744)
 	if err != nil {
