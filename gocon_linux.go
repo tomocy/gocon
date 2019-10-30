@@ -20,6 +20,15 @@ type Container struct {
 	PipeFD int `json:"pipe_fd"`
 }
 
+func (c *Container) State() (*specs.State, error) {
+	if err := c.load(); err != nil {
+		return nil, fmt.Errorf("failed to load: %s", err)
+	}
+
+	state := specs.State(c.state)
+	return &state, nil
+}
+
 func (c *Container) Clone(args ...string) error {
 	if err := c.createWorkspace(); err != nil {
 		return fmt.Errorf("failed to create work dir: %s", err)
