@@ -157,7 +157,7 @@ func (c *Container) waitChildReady() <-chan error {
 	go func() {
 		defer close(ch)
 
-		ch <- c.readPipe()
+		ch <- c.readPipe(ofSelf)
 	}()
 
 	return ch
@@ -293,12 +293,12 @@ func (c *Container) waitToStart() <-chan error {
 	go func() {
 		defer close(ch)
 
-		if err := c.writePipe(); err != nil {
+		if err := c.writePipe(ofSelf); err != nil {
 			ch <- err
 			return
 		}
 
-		ch <- c.readPipe()
+		ch <- c.readPipe(ofSelf)
 	}()
 
 	return ch
@@ -333,9 +333,8 @@ func (c *Container) load() error {
 	return json.NewDecoder(src).Decode(c)
 }
 
-func (c *Container) writePipe() error {
-	name := fmt.Sprintf("/proc/self/fd/%d", c.PipeFD)
-	f, err := os.OpenFile(name, os.O_WRONLY, 0700)
+func (c *Container) writePipe(of of) error {
+	f, err := os.OpenFile(c.pipeFD(of), os.O_WRONLY, 0700)
 	if err != nil {
 		return err
 	}
@@ -343,15 +342,29 @@ func (c *Container) writePipe() error {
 	return f.Close()
 }
 
-func (c *Container) readPipe() error {
-	name := fmt.Sprintf("/proc/self/fd/%d", c.PipeFD)
-	f, err := os.Open(name)
+func (c *Container) readPipe(of of) error {
+	f, err := os.Open(c.pipeFD(of))
 	if err != nil {
 		return err
 	}
 
 	return f.Close()
 }
+
+func (c *Container) pipeFD(of of) string {
+	if of == ofSelf {
+		return fmt.Sprintf("/proc/self/fd/%d", c.PipeFD)
+	}
+
+	return fmt.Sprintf("/proc/%d/fd/%d", c.Pid, c.PipeFD)
+}
+
+type of int
+
+const (
+	ofSelf of = iota
+	ofChild
+)
 
 func (c *Container) stateFilename() string {
 	return filepath.Join(c.workDir(), "state.json")
