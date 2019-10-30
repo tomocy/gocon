@@ -313,6 +313,18 @@ func (c *Container) exec(proc *specs.Process) error {
 	return unix.Exec(path, proc.Args, os.Environ())
 }
 
+func (c *Container) Start() error {
+	if err := c.load(); err != nil {
+		return fmt.Errorf("failed to load: %s", err)
+	}
+
+	return c.tellChildToStart()
+}
+
+func (c *Container) tellChildToStart() error {
+	return c.writePipe(ofChild)
+}
+
 func (c *Container) save() error {
 	dst, err := os.OpenFile(c.stateFilename(), os.O_CREATE|os.O_WRONLY, 0744)
 	if err != nil {
