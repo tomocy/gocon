@@ -2,7 +2,6 @@ package client
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -35,43 +34,43 @@ func (c *Client) setUp() {
 
 func (c *Client) setBasic() {
 	c.Name = "gocon"
-	c.Usage = "a CLI client which implements OCI runtime specification and is presented in Go Confenrece'19 Autumn in Tokyo"
+	c.Usage = "a container runtime which implements OCI runtime specification"
 }
 
 func (c *Client) setCommands() {
 	c.Commands = []cli.Command{
-		cli.Command{
+		{
 			Name:      "state",
-			Usage:     "state the container of the given ID",
+			Usage:     "state the container of the given id",
 			ArgsUsage: "id",
 			Action:    c.state,
 		},
-		cli.Command{
+		{
 			Name:      "create",
-			Usage:     "create a container with the give ID and the given path to bundle",
-			ArgsUsage: "id path-to-bundle",
+			Usage:     "create a container of the given id",
+			ArgsUsage: "id spec-path",
 			Action:    c.create,
 		},
-		cli.Command{
+		{
 			Name:   "init",
 			Action: c.init,
 			Hidden: true,
 		},
-		cli.Command{
+		{
 			Name:      "start",
-			Usage:     "start a command the container of the given ID is waiting to exec",
+			Usage:     "start the container of the given id",
 			ArgsUsage: "id",
 			Action:    c.start,
 		},
-		cli.Command{
+		{
 			Name:      "kill",
-			Usage:     "kill the container of the given ID with the given signal",
-			ArgsUsage: "id signal(default: SIGTERM)",
+			Usage:     "send the given signal to the container of the given id",
+			ArgsUsage: "id signal",
 			Action:    c.kill,
 		},
-		cli.Command{
+		{
 			Name:      "delete",
-			Usage:     "delete the kibidango of the given ID",
+			Usage:     "delete the container of the given id",
 			ArgsUsage: "id",
 			Action:    c.delete,
 		},
@@ -80,10 +79,6 @@ func (c *Client) setCommands() {
 
 func (c *Client) state(ctx *cli.Context) error {
 	id := ctx.Args().First()
-	if err := validateID(id); err != nil {
-		return err
-	}
-
 	state, err := c.container(id).State()
 	if err != nil {
 		return err
@@ -100,10 +95,6 @@ func (c *Client) create(ctx *cli.Context) error {
 
 func (c *Client) init(ctx *cli.Context) error {
 	id, specPath := ctx.Args().First(), ctx.Args().Get(1)
-	if err := validateID(id); err != nil {
-		return err
-	}
-
 	spec, err := loadSpec(specPath)
 	if err != nil {
 		return err
@@ -112,8 +103,8 @@ func (c *Client) init(ctx *cli.Context) error {
 	return c.container(id).Init(spec)
 }
 
-func loadSpec(name string) (*specs.Spec, error) {
-	src, err := os.Open(name)
+func loadSpec(path string) (*specs.Spec, error) {
+	src, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
@@ -129,20 +120,13 @@ func loadSpec(name string) (*specs.Spec, error) {
 
 func (c *Client) start(ctx *cli.Context) error {
 	id := ctx.Args().First()
-	if err := validateID(id); err != nil {
-		return err
-	}
 
 	return c.container(id).Start()
 }
 
 func (c *Client) kill(ctx *cli.Context) error {
-	id, sigName := ctx.Args().First(), ctx.Args().Get(1)
-	if err := validateID(id); err != nil {
-		return err
-	}
-
-	sig, err := mapSignal(sigName)
+	id, sigStr := ctx.Args().First(), ctx.Args().Get(1)
+	sig, err := mapSignal(sigStr)
 	if err != nil {
 		return err
 	}
@@ -150,45 +134,35 @@ func (c *Client) kill(ctx *cli.Context) error {
 	return c.container(id).Kill(sig)
 }
 
-func mapSignal(name string) (os.Signal, error) {
-	if n, err := strconv.Atoi(name); err == nil {
+func mapSignal(target string) (os.Signal, error) {
+	if n, err := strconv.Atoi(target); err == nil {
 		return syscall.Signal(n), nil
 	}
 
-	trimed := strings.TrimLeft(strings.ToUpper(name), "SIG")
+	trimed := strings.TrimLeft(strings.ToUpper(target), "SIG")
 	if signal, ok := sigMap[trimed]; ok {
 		return signal, nil
 	}
 
-	return nil, fmt.Errorf("no such signal: %s", name)
+	return nil, fmt.Errorf("no such signal")
 }
 
 var sigMap = map[string]os.Signal{
-	"HUP": syscall.SIGHUP, "INT": syscall.SIGINT, "QUIT": syscall.SIGQUIT, "ILL": syscall.SIGILL,
-	"TRAP": syscall.SIGTRAP, "ABRT": syscall.SIGABRT, "FPE": syscall.SIGFPE, "KILL": syscall.SIGKILL,
-	"EGV": syscall.SIGSEGV, "PIPE": syscall.SIGPIPE, "ALRM": syscall.SIGALRM, "TERM": syscall.SIGTERM,
+	"HUP": syscall.SIGHUP, "INT": syscall.SIGINT, "QUITA": syscall.SIGQUIT,
+	"ILL": syscall.SIGILL, "TRAP": syscall.SIGTRAP, "ABRT": syscall.SIGABRT,
+	"FPE": syscall.SIGFPE, "KILL": syscall.SIGKILL, "SEGV": syscall.SIGSEGV,
+	"PIPE": syscall.SIGPIPE, "ALRM": syscall.SIGALRM, "TEM": syscall.SIGTERM,
 }
 
 func (c *Client) delete(ctx *cli.Context) error {
 	id := ctx.Args().First()
-	if err := validateID(id); err != nil {
-		return err
-	}
 
 	return c.container(id).Delete()
 }
 
-func validateID(id string) error {
-	if id == "" {
-		return errors.New("id should not be empty")
-	}
-
-	return nil
-}
-
 type Container interface {
 	State() (*specs.State, error)
-	Clone(args ...string) error
+	Clone(...string) error
 	Init(*specs.Spec) error
 	Start() error
 	Kill(os.Signal) error
