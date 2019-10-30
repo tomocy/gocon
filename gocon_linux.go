@@ -4,69 +4,142 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 
+	"github.com/docker/docker/pkg/mount"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 )
 
-func (c *Container) Clone(args ...string) error {
-	if err := c.createWorkspace(); err != nil {
-		return fmt.Errorf("failed to create workspace: %s", err)
+type Container struct {
+	state
+	PipeFD int `json:"pipe_fd"`
+}
+
+func (c *Container) State() (*specs.State, error) {
+	if err := c.load(); err != nil {
+		return nil, fmt.Errorf("failed to load: %s", err)
 	}
 
-	cmd := c.buildCloneCmd(args...)
-	if err := cmd.Start(); err != nil {
-		return err
+	state := specs.State(c.state)
+	return &state, nil
+}
+
+func (c *Container) Clone(args ...string) error {
+	if err := c.createWorkspace(); err != nil {
+		return fmt.Errorf("failed to create work dir: %s", err)
 	}
-	c.Pid = cmd.Process.Pid
-	c.Status = statusCreating
 
 	if err := c.save(); err != nil {
 		return fmt.Errorf("failed to save: %s", err)
 	}
 
-	return cmd.Wait()
+	select {
+	case err := <-c.waitChildReady():
+		if err != nil {
+			return fmt.Errorf("failed to wait child ready: %s", err)
+		}
+	case err := <-c.clone(args...):
+		if err != nil {
+			return err
+		}
+	}
+
+	if err := c.load(); err != nil {
+		return fmt.Errorf("failed to load: %s", err)
+	}
+	if err := c.save(); err != nil {
+		return fmt.Errorf("failed to save: %s", err)
+	}
+
+	return nil
 }
 
 func (c *Container) createWorkspace() error {
-	dir := c.workspace()
-	if err := os.MkdirAll(dir, 0744); err != nil {
+	if err := createWorkDirIfNone(); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(c.workDir(), 0744); err != nil {
 		return err
 	}
 
 	if err := c.createStateFile(); err != nil {
 		return err
 	}
+	if err := c.createNamedPipe(); err != nil {
+		return err
+	}
 
-	return c.createPipe()
+	return nil
+}
+
+func createWorkDirIfNone() error {
+	if _, err := os.Stat(workDir()); err == nil {
+		return nil
+	}
+
+	return createWorkDir()
+}
+
+func createWorkDir() error {
+	return os.MkdirAll(workDir(), 0744)
 }
 
 func (c *Container) createStateFile() error {
 	name := c.stateFilename()
-	dst, err := os.Create(name)
+	f, err := os.Create(name)
 	if err != nil {
 		return err
 	}
-	defer dst.Close()
+	if err := f.Close(); err != nil {
+		return err
+	}
 
-	return json.NewEncoder(dst).Encode(specs.State{})
+	return c.save()
 }
 
-func (c *Container) createPipe() error {
-	name := c.pipeFilename()
+func (c *Container) createNamedPipe() error {
+	name := c.pipename()
+	if err := unix.Mkfifo(name, 700); err != nil {
+		return err
+	}
 
-	return unix.Mkfifo(name, 0744)
+	fd, err := unix.Open(name, os.O_RDONLY|unix.O_NONBLOCK, 700)
+	if err != nil {
+		return err
+	}
+	c.PipeFD = fd
+
+	return nil
+}
+
+func (c *Container) clone(args ...string) <-chan error {
+	ch := make(chan error)
+	go func() {
+		defer close(ch)
+
+		cmd := c.buildCloneCmd(args...)
+		if err := cmd.Start(); err != nil {
+			ch <- err
+		}
+
+		c.Pid = cmd.Process.Pid
+
+		ch <- cmd.Wait()
+	}()
+
+	return ch
 }
 
 func (c *Container) buildCloneCmd(args ...string) *exec.Cmd {
 	cmd := exec.Command("/proc/self/exe", args...)
 	cmd.SysProcAttr = &unix.SysProcAttr{
-		Cloneflags: unix.CLONE_NEWIPC | unix.CLONE_NEWNET | unix.CLONE_NEWNS | unix.CLONE_NEWPID | unix.CLONE_NEWUSER | unix.CLONE_NEWUTS,
+		Cloneflags: unix.CLONE_NEWIPC | unix.CLONE_NEWNET | unix.CLONE_NEWNS |
+			unix.CLONE_NEWPID | unix.CLONE_NEWUSER | unix.CLONE_NEWUTS,
 		UidMappings: []syscall.SysProcIDMap{
 			{ContainerID: 0, HostID: os.Getuid(), Size: 1},
 		},
@@ -79,24 +152,52 @@ func (c *Container) buildCloneCmd(args ...string) *exec.Cmd {
 	return cmd
 }
 
+func (c *Container) waitChildReady() <-chan error {
+	ch := make(chan error)
+	go func() {
+		defer close(ch)
+
+		ch <- c.readPipe(ofSelf)
+	}()
+
+	return ch
+}
+
 func (c *Container) Init(spec *specs.Spec) error {
-	if err := unix.Sethostname([]byte(c.ID)); err != nil {
-		return fmt.Errorf("failed to set hostname: %s", err)
+	if err := c.load(); err != nil {
+		return fmt.Errorf("failed to load: %s", err)
 	}
+	c.Version, c.Annotations = spec.Version, spec.Annotations
+	c.Bundle, _ = filepath.Abs(spec.Root.Path)
+
+	if spec.Hostname != "" {
+		if err := unix.Sethostname([]byte(spec.Hostname)); err != nil {
+			return fmt.Errorf("failed to set hostname")
+		}
+	}
+
 	if err := c.mount(spec.Root, spec.Mounts); err != nil {
 		return fmt.Errorf("failed to mount: %s", err)
 	}
-	if err := c.enable(spec.Root, bins, libs...); err != nil {
-		return fmt.Errorf("failed to enable: %s", err)
-	}
+
 	if spec.Linux != nil {
 		if err := c.limit(spec.Linux); err != nil {
 			return fmt.Errorf("failed to limit: %s", err)
 		}
 	}
+
+	if err := c.save(); err != nil {
+		return fmt.Errorf("failed to save: %s", err)
+	}
+
 	if err := c.pivotRoot(spec.Root); err != nil {
 		return fmt.Errorf("failed to pivot root: %s", err)
 	}
+
+	if err := <-c.waitToStart(); err != nil {
+		return fmt.Errorf("failed to wait to start: %s", err)
+	}
+
 	if err := c.exec(spec.Process); err != nil {
 		return fmt.Errorf("failed to exec: %s", err)
 	}
@@ -104,125 +205,27 @@ func (c *Container) Init(spec *specs.Spec) error {
 	return nil
 }
 
-func (c *Container) load() error {
-	name := c.stateFilename()
-	src, err := os.Open(name)
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-
-	return json.NewDecoder(src).Decode(&c.state)
-}
-
-func (c *Container) meet(spec *specs.Spec) {
-	c.Version = spec.Version
-	c.Bundle = spec.Root.Path
-	c.Annotations = spec.Annotations
-}
-
-func (c *Container) save() error {
-	name := c.stateFilename()
-	dst, err := os.OpenFile(name, os.O_WRONLY, 0744)
-	if err != nil {
-		return err
-	}
-	defer dst.Close()
-
-	return json.NewEncoder(dst).Encode(c.state)
-}
-
-func (c *Container) stateFilename() string {
-	return filepath.Join(c.workspace(), "spec.json")
-}
-
-func (c *Container) pipeFilename() string {
-	return filepath.Join(c.workspace(), "pipe.fifo")
-}
-
-func (c *Container) workspace() string {
-	return filepath.Join(workSpacesDir, c.ID)
-}
-
-const workSpacesDir = "/run/gocon"
-
 func (c *Container) mount(root *specs.Root, ms []specs.Mount) error {
-	var flags uintptr
+	var ops []string
 	if root.Readonly {
-		flags = unix.MS_RDONLY
+		ops = append(ops, "ro")
 	}
 
-	ms = append(defaultFs, ms...)
 	for _, m := range ms {
-		dst := filepath.Join(root.Path, m.Destination)
-		if err := os.MkdirAll(dst, 0755); err != nil {
-			return err
-		}
-
-		flags |= unix.MS_NOEXEC | unix.MS_NOSUID | unix.MS_NODEV
-		if err := unix.Mount(m.Source, dst, m.Type, flags, ""); err != nil {
+		if err := mount.ForceMount(
+			m.Source, filepath.Join(root.Path, m.Destination), m.Type, strings.Join(ops, ","),
+		); err != nil {
 			return err
 		}
 	}
 
 	return nil
-}
-
-var defaultFs = []specs.Mount{
-	{Destination: "/proc", Type: "proc", Source: "/proc"},
-}
-
-func (c *Container) enable(root *specs.Root, bins []string, libs ...string) error {
-	if 1 <= len(libs) {
-		if err := c.ensure(root, libs); err != nil {
-			return err
-		}
-	}
-
-	if err := os.MkdirAll(filepath.Join(root.Path, "bin"), 0755); err != nil {
-		return err
-	}
-
-	for _, bin := range bins {
-		if err := copyFile(bin, filepath.Join(root.Path, bin)); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (c *Container) ensure(root *specs.Root, libs []string) error {
-	if err := os.MkdirAll(filepath.Join(root.Path, "lib"), 0755); err != nil {
-		return err
-	}
-
-	for _, lib := range libs {
-		if err := copyFile(lib, filepath.Join(root.Path, lib)); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-var (
-	bins = []string{"/bin/sh", "/bin/ls", "/bin/ps", "/bin/cat", "/bin/date", "/bin/echo"}
-	libs = []string{"/lib/ld-musl-x86_64.so.1"}
-)
-
-func copyFile(src, dst string) error {
-	read, err := ioutil.ReadFile(src)
-	if err != nil {
-		return err
-	}
-
-	return ioutil.WriteFile(dst, read, 0755)
 }
 
 func (c *Container) limit(spec *specs.Linux) error {
+	dir := cgroupDir(spec.CgroupsPath)
 	if spec.Resources != nil && spec.Resources.CPU != nil {
-		if err := c.limitCPU(spec.CgroupsPath, spec.Resources.CPU); err != nil {
+		if err := c.limitCPU(dir, spec.Resources.CPU); err != nil {
 			return err
 		}
 	}
@@ -230,81 +233,40 @@ func (c *Container) limit(spec *specs.Linux) error {
 	return nil
 }
 
-func (c *Container) limitCPU(path string, spec *specs.LinuxCPU) error {
-	dir := c.cgroupsDir("cpu", path)
+func cgroupDir(path string) string {
+	dir := "/sys/fs/cgroup"
+	if filepath.IsAbs(path) {
+		return filepath.Join(dir, path)
+	}
+
+	return filepath.Join(dir, "gocon", path)
+}
+
+func (c *Container) limitCPU(dir string, spec *specs.LinuxCPU) error {
+	dir = filepath.Join(dir, "cpu", "gocon")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	if spec.Shares != nil {
-		if err := c.limitCPUShares(dir, *spec.Shares); err != nil {
-			return err
-		}
-	}
 	if spec.Quota != nil {
-		if err := c.limitCPUQuota(dir, *spec.Quota); err != nil {
-			return err
-		}
-	}
-	if spec.Period != nil {
-		if err := c.limitCPUPeriod(dir, *spec.Period); err != nil {
-			return err
-		}
-	}
-	if spec.RealtimeRuntime != nil {
-		if err := c.limitCPURealtimeRuntime(dir, *spec.RealtimeRuntime); err != nil {
-			return err
-		}
-	}
-	if spec.RealtimePeriod != nil {
-		if err := c.limitCPURealtimePeriod(dir, *spec.RealtimePeriod); err != nil {
+		if err := ioutil.WriteFile(
+			filepath.Join(dir, "cpu.cfs_quota_us"), []byte(fmt.Sprint(*spec.Quota)), 0755,
+		); err != nil {
 			return err
 		}
 	}
 
-	return c.addLimit(filepath.Join(dir, "tasks"), fmt.Sprint(os.Getpid()))
-}
-
-func (c *Container) limitCPUShares(dir string, shares uint64) error {
-	return c.addLimit(filepath.Join(dir, "cpu.shares"), fmt.Sprint(shares))
-}
-
-func (c *Container) limitCPUQuota(dir string, quota int64) error {
-	return c.addLimit(filepath.Join(dir, "cpu.cfs_quota_us"), fmt.Sprint(quota))
-}
-
-func (c *Container) limitCPUPeriod(dir string, period uint64) error {
-	return c.addLimit(filepath.Join(dir, "cpu.cfs_period_us"), fmt.Sprint(period))
-}
-
-func (c *Container) limitCPURealtimeRuntime(dir string, runtime int64) error {
-	log.Println(runtime)
-	return c.addLimit(filepath.Join(dir, "cpu.rt_runtime_us"), fmt.Sprint(runtime))
-}
-
-func (c *Container) limitCPURealtimePeriod(dir string, period uint64) error {
-	return c.addLimit(filepath.Join(dir, "cpu.rt_period_us"), fmt.Sprint(period))
-}
-
-func (c *Container) addLimit(name, limit string) error {
-	return ioutil.WriteFile(name, []byte(limit), 644)
-}
-
-func (c *Container) cgroupsDir(kind, path string) string {
-	if path == "" {
-		return filepath.Join(cgroupsDir, kind, "gocon", c.ID)
-	}
-	if !filepath.IsAbs(path) {
-		return filepath.Join(cgroupsDir, kind, "gocon", c.ID, path)
+	if err := ioutil.WriteFile(
+		filepath.Join(dir, "tasks"), []byte(fmt.Sprint(os.Getpid())), 0755,
+	); err != nil {
+		return err
 	}
 
-	return filepath.Join(cgroupsDir, kind, path)
+	return nil
 }
-
-const cgroupsDir = "/sys/fs/cgroup"
 
 func (c *Container) pivotRoot(root *specs.Root) error {
 	oldFs := "oldfs"
-	if err := os.MkdirAll(filepath.Join(root.Path, oldFs), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root.Path, oldFs), 0700); err != nil {
 		return err
 	}
 	if err := unix.Mount(root.Path, root.Path, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
@@ -326,14 +288,129 @@ func (c *Container) pivotRoot(root *specs.Root) error {
 	return nil
 }
 
-func (c *Container) exec(proc *specs.Process) error {
-	cmd := exec.Command(proc.Args[0], proc.Args[1:]...)
-	cmd.Env = proc.Env
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+func (c *Container) waitToStart() <-chan error {
+	ch := make(chan error)
+	go func() {
+		defer close(ch)
 
-	return cmd.Run()
+		if err := c.writePipe(ofSelf); err != nil {
+			ch <- err
+			return
+		}
+
+		ch <- c.readPipe(ofSelf)
+	}()
+
+	return ch
 }
 
+func (c *Container) exec(proc *specs.Process) error {
+	path, err := exec.LookPath(proc.Args[0])
+	if err != nil {
+		return err
+	}
+
+	return unix.Exec(path, proc.Args, os.Environ())
+}
+
+func (c *Container) Start() error {
+	if err := c.load(); err != nil {
+		return fmt.Errorf("failed to load: %s", err)
+	}
+
+	return c.tellChildToStart()
+}
+
+func (c *Container) tellChildToStart() error {
+	return c.writePipe(ofChild)
+}
+
+func (c *Container) Kill(sig os.Signal) error {
+	if err := c.load(); err != nil {
+		return fmt.Errorf("failed to load: %s", err)
+	}
+
+	proc, err := os.FindProcess(c.Pid)
+	if err != nil {
+		return fmt.Errorf("failed to find process: %s", err)
+	}
+
+	return proc.Signal(sig)
+}
+
+func (c *Container) Delete() error {
+	if err := c.load(); err != nil {
+		return fmt.Errorf("failed to load: %s", err)
+	}
+
+	return os.RemoveAll(c.workDir())
+}
+
+func (c *Container) save() error {
+	dst, err := os.OpenFile(c.stateFilename(), os.O_CREATE|os.O_WRONLY, 0744)
+	if err != nil {
+		return fmt.Errorf("failed to open spec file: %s", err)
+	}
+	defer dst.Close()
+
+	return json.NewEncoder(dst).Encode(c)
+}
+
+func (c *Container) load() error {
+	src, err := os.Open(c.stateFilename())
+	if err != nil {
+		return fmt.Errorf("failed to open spec file: %s", err)
+	}
+	defer src.Close()
+
+	return json.NewDecoder(src).Decode(c)
+}
+
+func (c *Container) writePipe(of of) error {
+	f, err := os.OpenFile(c.pipeFD(of), os.O_WRONLY, 0700)
+	if err != nil {
+		return err
+	}
+
+	return f.Close()
+}
+
+func (c *Container) readPipe(of of) error {
+	f, err := os.Open(c.pipeFD(of))
+	if err != nil {
+		return err
+	}
+
+	return f.Close()
+}
+
+func (c *Container) pipeFD(of of) string {
+	if of == ofSelf {
+		return fmt.Sprintf("/proc/self/fd/%d", c.PipeFD)
+	}
+
+	return fmt.Sprintf("/proc/%d/fd/%d", c.Pid, c.PipeFD)
+}
+
+type of int
+
 const (
-	statusCreating = "creating"
+	ofSelf of = iota
+	ofChild
 )
+
+func (c *Container) stateFilename() string {
+	return filepath.Join(c.workDir(), "state.json")
+}
+
+func (c *Container) pipename() string {
+	return filepath.Join(c.workDir(), "pipe.fifo")
+}
+
+func (c *Container) workDir() string {
+	return filepath.Join(workDir(), c.ID)
+}
+
+func workDir() string {
+	return filepath.Join("/run", "gocon")
+}
