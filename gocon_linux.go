@@ -185,6 +185,10 @@ func (c *Container) Init(spec *specs.Spec) error {
 		return fmt.Errorf("failed to pivot root: %s", err)
 	}
 
+	if err := <-c.waitToStart(); err != nil {
+		return fmt.Errorf("failed to wait to start: %s", err)
+	}
+
 	if err := c.exec(spec.Process); err != nil {
 		return fmt.Errorf("failed to exec: %s", err)
 	}
@@ -275,6 +279,22 @@ func (c *Container) pivotRoot(root *specs.Root) error {
 	return nil
 }
 
+func (c *Container) waitToStart() <-chan error {
+	ch := make(chan error)
+	go func() {
+		defer close(ch)
+
+		if err := c.writePipe(); err != nil {
+			ch <- err
+			return
+		}
+
+		ch <- c.readPipe()
+	}()
+
+	return ch
+}
+
 func (c *Container) exec(proc *specs.Process) error {
 	path, err := exec.LookPath(proc.Args[0])
 	if err != nil {
@@ -302,6 +322,16 @@ func (c *Container) load() error {
 	defer src.Close()
 
 	return json.NewDecoder(src).Decode(c)
+}
+
+func (c *Container) writePipe() error {
+	name := fmt.Sprintf("/proc/self/fd/%d", c.PipeFD)
+	f, err := os.OpenFile(name, os.O_WRONLY, 0700)
+	if err != nil {
+		return err
+	}
+
+	return f.Close()
 }
 
 func (c *Container) readPipe() error {
